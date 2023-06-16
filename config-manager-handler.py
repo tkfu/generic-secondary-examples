@@ -36,7 +36,15 @@ def get_firmware_info():
 	for filepath in baseconfig.keys():
 		firmware_dict[filepath] = {}
 		if os.path.exists(filepath):
-			firmware_dict[filepath]['content'] = base64.b64encode((open(filepath,"rb").read())).decode()
+			if filepath['template']:
+				pass
+				# load the raw file
+				# do the template subs in memory
+				# compare to file on disk
+				  # if file on disk is byte-identical to template-subbed file, base64-encode content of template file
+				  # otherwise, b64-enc file on disk
+			else:
+				firmware_dict[filepath]['content'] = base64.b64encode((open(filepath,"rb").read())).decode()
 			firmware_dict[filepath]['exists'] = True
 		else:
 			firmware_dict[filepath]['exists'] = False
@@ -51,6 +59,7 @@ def install():
 	install_report = {}
 	newfile = os.environ.get('SECONDARY_FIRMWARE_PATH')
 	oldfile = os.environ.get('SECONDARY_FIRMWARE_PATH_PREV')
+
 	with open(newfile,"r") as f:
 		configfile_string = f.read()
 		newconfig = json.loads(configfile_string)
@@ -96,9 +105,15 @@ def apply_configurations(myconfig):
 			  + ', but this device requires configs for files ' + ', '.join(baseconfig.keys()))
 	for filepath in myconfig:
 		if myconfig[filepath]['exists']:
-			filecontent = base64.b64decode(myconfig[filepath]['content'])
+			if myconfig[filepath]['template']:
+				pass
+				# do the template replacement
+			else:
+				filecontent = base64.b64decode(myconfig[filepath]['content'])
 			with open(filepath,"wb") as f:
 				f.write(filecontent)
+				if myconfig[filepath]['reload_command']:
+					os.system(" ".join(myconfig[filepath]['reload_command']))
 		else:
 			if os.path.exists(filepath):
 				os.remove(filepath)
@@ -122,6 +137,13 @@ def dump_current_firmware():
 			f.write(fw_string)
 	else:
 		print(fw_string,end="")
+
+def save_custom_meta:
+	pass
+
+	# create temp file if not exists
+	# copy existing to $.rollback
+	# write custom meta if any
 
 
 if action == 'get-firmware-info':
