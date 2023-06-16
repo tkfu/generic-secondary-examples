@@ -1,0 +1,17 @@
+{
+    "configmanager":
+    {
+        "substitutions":
+        {
+            "filepath1":
+            {
+                "var1": "value",
+                "var2": "value"
+            },
+            "filepath2":
+            {
+
+            }
+        }
+    }
+}

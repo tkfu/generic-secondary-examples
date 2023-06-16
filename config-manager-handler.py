@@ -5,6 +5,8 @@ import hashlib
 import os
 import json
 import base64
+from string import Template
+
 
 parser=argparse.ArgumentParser()
 parser.add_argument("action")
@@ -31,18 +33,35 @@ if args.baseconfig is not None:
 action = args.action
 
 def get_firmware_info():
+	current_custom_meta = json.load(open(os.environ.get('SECONDARY_FIRMWARE_PATH'),'r')) # TODO use pathlib to get the real file
+	current_custom_meta = {}
 	firmware_dict = {}
 	firmware_info = {}
-	for filepath in baseconfig.keys():
+	# load current firmware file into a dict
+	current_firmware_dict = json.load(open(os.environ.get('SECONDARY_FIRMWARE_PATH'),'r'))
+	# loop through all the config files under management, and see if they match
+	for filepath in current_firmware_dict.keys():
 		firmware_dict[filepath] = {}
 		if os.path.exists(filepath):
-			if filepath['template']:
-				pass
-				# load the raw file
-				# do the template subs in memory
+			# First, let's handle the case that the file has substitutions
+			if 'substitutions' in current_firmware_dict[filepath]:
+				# load the raw file contents, i.e. before replacements are done
+				content = base64.b64decode(current_firmware_dict[filepath]['content'])
+				# do the template subs
+				subs = current_custom_meta['configmanager']['substitutions'][filepath]
+				content_after_subs = Template(content).substitute(subs)
+				real_file_contents = open(filepath,'r').read()
 				# compare to file on disk
-				  # if file on disk is byte-identical to template-subbed file, base64-encode content of template file
-				  # otherwise, b64-enc file on disk
+				if content_after_subs == real_file_contents:
+					# if file on disk is byte-identical to template-subbed file, we use the template content
+				  firmware_dict[filepath]['content'] = current_firmware_dict[filepath]['content']
+				else:
+				  # otherwise, we use the real content of the file on disk
+					firmware_dict[filepath]['content'] = base64.b64encode((open(filepath,"rb").read())).decode()
+				# finally, we add in the existing other keys from the dict on disk
+				firmware_dict[filepath]['substitutions'] = current_firmware_dict[filepath]['substitutions']
+				if "reload_command" in current_firmware_dict:
+					firmware_dict[filepath]['reload_command'] = current_firmware_dict[filepath]['reload_command']
 			else:
 				firmware_dict[filepath]['content'] = base64.b64encode((open(filepath,"rb").read())).decode()
 			firmware_dict[filepath]['exists'] = True
@@ -52,7 +71,8 @@ def get_firmware_info():
 	firmware_info['sha256'] = hashlib.sha256(fw_string.encode('utf-8')).hexdigest()
 	firmware_info['length'] = len(fw_string)
 	firmware_info['status'] = 'ok'
-	firmware_info['message'] = 'Configmanager: Reported config for files: ' + ', '.join(baseconfig.keys())
+	# TODO make the message list a useful error
+	firmware_info['message'] = 'Configmanager: Reported config for files: ' + ', '.join(current_firmware_dict.keys())
 	return firmware_info
 
 def install():
@@ -74,24 +94,14 @@ def install():
 				oldconfig = json.load(f)
 			apply_configurations(oldconfig)
 		except Exception as rollback_ex:
-			try:
-				apply_configurations(baseconfig)
-			except Exception as baseconfig_ex:
-				install_report['status'] = 'failed'
-				install_report['message'] = 'Configmanager: failed to apply config with error: ' + repr(ex) \
-				  + '. Rollback to previous config also failed, with error: ' + repr(rollback_ex) \
-				  + '. Rollback to base config also failed, with error: ' + repr(rollback_ex)
-				return install_report
-			else:
-				install_report['status'] = 'failed'
-				install_report['message'] = 'Configmanager: failed to apply config with error: ' + repr(ex) \
-				  + '. Rollback to previous config also failed, with error: ' + repr(rollback_ex) \
-				  + ', but rollback to base config was successful.'
-				return install_report
+			install_report['status'] = 'failed'
+			install_report['message'] = f"Configmanager: failed to apply config with error: {repr(ex)}. \
+			  Rollback to previous config also failed, with error: {repr(rollback_ex)}."
+			return install_report
 		else:
 			install_report['status'] = 'failed'
-			install_report['message'] = 'Configmanager: failed to apply config with error: ' + repr(ex) \
-			  + ', but rollback to previous config was successful.'
+			install_report['message'] = f"Configmanager: failed to apply config with error: {repr(ex)}, \
+			  but rollback to previous config was successful."
 			return install_report
 	else:
 		install_report['status'] = 'ok'
@@ -99,20 +109,25 @@ def install():
 		return install_report
 
 def apply_configurations(myconfig):
+	new_custom_meta = os.environ.get('SECONDARY_CUSTOM_METADATA')
+	current_custom_meta = os.environ.get('SECONDARY_FIRMWARE_PATH') # todo pathlib to get enclosing dir
 	# check if list of files in the config file we want to apply exactly matches the list in the configmanager config
-	if not myconfig.keys() == baseconfig.keys():
-		raise RuntimeError('Mismatched file list: attempted to apply configs for files ' + ', '.join(myconfig.keys()) \
-			  + ', but this device requires configs for files ' + ', '.join(baseconfig.keys()))
 	for filepath in myconfig:
 		if myconfig[filepath]['exists']:
-			if myconfig[filepath]['template']:
-				pass
+			if 'substitutions' in myconfig[filepath]:
+				# verify that all variables to sub are present
+				for sub in myconfig[filepath]['substitutions']:
+					if sub not in new_custom_meta['substitutions'][filepath]:
+						raise RuntimeError(f"Config to apply for file {filepath} requires variable {sub} to be defined, \
+							but it was not present in the custom metadata.")
 				# do the template replacement
+				template = base64.b64decode(myconfig[filepath]['content'])
+				filecontent = Template(template).substitute(new_custom_meta['substitutions'][filepath])
 			else:
 				filecontent = base64.b64decode(myconfig[filepath]['content'])
 			with open(filepath,"wb") as f:
 				f.write(filecontent)
-				if myconfig[filepath]['reload_command']:
+				if 'reload_command' in myconfig[filepath]:
 					os.system(" ".join(myconfig[filepath]['reload_command']))
 		else:
 			if os.path.exists(filepath):
@@ -122,6 +137,7 @@ def apply_configurations(myconfig):
 def dumps_json_canonical(mydict):
 	return json.dumps(mydict,separators=(',',':'),sort_keys=True,ensure_ascii=False,allow_nan=False)
 
+# TODO update this function to work with substitutions
 def dump_current_firmware():
 	firmware_dict = {}
 	for filepath in baseconfig.keys():
@@ -151,7 +167,7 @@ if action == 'get-firmware-info':
 	try:
 		output = get_firmware_info()
 	except Exception as ex:
-		print('Could not get firmware info: ' + repr(ex))
+		print(f"Could not get firmware info: {repr(ex)}")
 		quit(65)
 	else:
 		print(json.dumps(output))
@@ -161,7 +177,7 @@ elif action == 'install':
 	try:
 		output = install()
 	except Exception as ex:
-		print('Install action failure: ' + repr(ex))
+		print(f"Install action failure: {repr(ex)}")
 		quit(65)
 	else:
 		print(json.dumps(output))
