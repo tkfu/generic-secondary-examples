@@ -3,14 +3,9 @@
     {
         "substitutions":
         {
-            "filepath1":
+            "/etc/fluent-bit/fluent-bit.conf":
             {
-                "var1": "value",
-                "var2": "value"
-            },
-            "filepath2":
-            {
-
+                "interval": "400"
             }
         }
     }
