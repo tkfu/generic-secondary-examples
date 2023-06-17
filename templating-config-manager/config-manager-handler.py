@@ -7,6 +7,7 @@ import json
 import base64
 from string import Template
 from pathlib import Path
+import subprocess
 
 
 parser=argparse.ArgumentParser()
@@ -17,7 +18,7 @@ action = args.action
 
 def get_firmware_info():
 	# load current firmware file into a dict
-	current_firmware_dict = json.loads(current_firmware)
+	current_configmap = json.loads(current_firmware)
 	current_custom_meta = {}
 	if os.path.isfile(firmware_dir + '/custom-metadata.json'):
 		current_custom_meta = json.loads(Path(firmware_dir + '/custom-metadata.json').read_text())
@@ -25,13 +26,13 @@ def get_firmware_info():
 	firmware_info = {}
 
 	# loop through all the config files under management
-	for filepath in current_firmware_dict.keys():
+	for filepath in current_configmap.keys():
 		output_firmware_dict[filepath] = {}
 		if os.path.exists(filepath):
 			# First, let's handle the case that the file has substitutions
-			if 'substitutions' in current_firmware_dict[filepath]:
+			if 'variables' in current_configmap[filepath]:
 				# load the raw file contents, i.e. before replacements are done
-				content = base64.b64decode(current_firmware_dict[filepath]['content'])
+				content = base64.b64decode(current_configmap[filepath]['content']).decode()
 				# do the template subs
 				subs = current_custom_meta['configmanager']['substitutions'][filepath]
 				content_after_subs = Template(content).substitute(subs)
@@ -39,19 +40,19 @@ def get_firmware_info():
 				# compare to file on disk
 				if content_after_subs == real_file_contents:
 					# if file on disk is identical to template-subbed file, we use the template content
-					output_firmware_dict[filepath]['content'] = current_firmware_dict[filepath]['content']
+					output_firmware_dict[filepath]['content'] = current_configmap[filepath]['content']
 				else:
 					# otherwise, we use the real content of the file on disk
-					output_firmware_dict[filepath]['content'] = base64.b64encode(Path(filepath).read_text())
-				# finally, we add back in the existing substitutions object from the dict on disk
-				output_firmware_dict[filepath]['substitutions'] = current_firmware_dict[filepath]['substitutions']
+					output_firmware_dict[filepath]['content'] = base64.b64encode(Path(filepath).read_bytes()).decode()
+				# finally, we add back in the existing variables object from the dict on disk
+				output_firmware_dict[filepath]['variables'] = current_configmap[filepath]['variables']
 			# if there aren't any substitutions, we can just put the raw file in the content field (b64-encoded)
 			else:
-				output_firmware_dict[filepath]['content'] = base64.b64encode(Path(filepath).read_text())
+				output_firmware_dict[filepath]['content'] = base64.b64encode(Path(filepath).read_bytes()).decode()
 			output_firmware_dict[filepath]['exists'] = True
 
-			if "reload_command" in current_firmware_dict:
-				output_firmware_dict[filepath]['reload_command'] = current_firmware_dict[filepath]['reload_command']
+			if "reload_command" in current_configmap:
+				output_firmware_dict[filepath]['reload_command'] = current_configmap[filepath]['reload_command']
 
 		else:
 			output_firmware_dict[filepath]['exists'] = False
@@ -60,7 +61,7 @@ def get_firmware_info():
 	firmware_info['length'] = len(fw_string)
 	firmware_info['status'] = 'ok'
 	# TODO make the message list a useful error
-	firmware_info['message'] = 'Configmanager: Files being managed: ' + ', '.join(current_firmware_dict.keys())
+	firmware_info['message'] = 'Configmanager: Files being managed: ' + ', '.join(current_configmap.keys())
 	return firmware_info
 
 def install():
@@ -98,7 +99,7 @@ def install():
 	else:
 		install_report['status'] = 'ok'
 		install_report['message'] = 'Configmanager: Applied config for files: ' + ', '.join(baseconfig.keys())
-		with open(firmware_dir + '/custom-metadata.json',"wb") as f:
+		with open(firmware_dir + '/custom-metadata.json',"w") as f:
 			f.write(new_custom_meta)
 		return install_report
 
@@ -115,30 +116,24 @@ def apply_configurations(configmap, custom_meta):
 						raise RuntimeError(f"Config to apply for file {filepath} requires variable {sub} to be defined, \
 							but it was not present in the custom metadata.")
 				# do the template replacement
-				template = base64.b64decode(configmap[filepath]['content'])
+				template = base64.b64decode(configmap[filepath]['content']).decode()
 				filecontent = Template(template).substitute(custom_meta['substitutions'][filepath])
 			else:
 				filecontent = base64.b64decode(configmap[filepath]['content'])
 			with open(filepath,"wb") as f:
 				f.write(filecontent)
 			if 'reload_command' in configmap[filepath] and old_filecontent != filecontent:
-				os.system(" ".join(configmap[filepath]['reload_command']))
+				proc = subprocess.run(configmap[filepath]['reload_command'], shell=True, check=True, capture_output=True)
+				(out, err) = proc.communicate()
+				if proc.returncode != 0:
+					raise RuntimeError(f"Command '{' '.join(configmap[filepath]['reload_command'])}' failed after replacing {filepath}.")
+
 		else:
 			if os.path.isfile(filepath):
 				os.remove(filepath)
 
 def dumps_json_canonical(mydict):
 	return json.dumps(mydict,separators=(',',':'),sort_keys=True,ensure_ascii=False,allow_nan=False)
-
-def save_custom_meta:
-
-	pass
-
-	# create temp file if not exists
-	# copy existing to $.rollback
-	# write custom meta if any
-
-
 
 try:
 	with open(os.environ['SECONDARY_FIRMWARE_PATH'],"r") as f:
@@ -175,8 +170,6 @@ elif action == 'install':
 	else:
 		print(json.dumps(output))
 		quit()
-elif action == 'dump-current-config':
-	dump_current_firmware()
 
 else:
 	print("Unsupported action: " + action)
