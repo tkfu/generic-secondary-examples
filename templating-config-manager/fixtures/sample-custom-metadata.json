@@ -1,0 +1,12 @@
+{
+    "configmanager":
+    {
+        "substitutions":
+        {
+            "/etc/fluent-bit/fluent-bit.conf":
+            {
+                "interval": "400"
+            }
+        }
+    }
+}
